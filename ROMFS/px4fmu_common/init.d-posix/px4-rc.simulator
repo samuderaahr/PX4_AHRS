@@ -1,0 +1,68 @@
+#!/bin/sh
+# shellcheck disable=SC2154
+
+# Simulator IMU data provided at 250 Hz
+param set-default IMU_INTEG_RATE 250
+
+if [ "$PX4_SIMULATOR" = "sihsim" ] || [ "$(param show -q SYS_AUTOSTART)" -eq "0" ]; then
+
+	if ! simulator_sih start; then
+		echo "ERROR  [init] simulator_sih failed to start"
+		exit 1
+	fi
+
+elif [ "$PX4_SIMULATOR" = "ignition" ]; then
+
+	# source generated gazebo_env.sh for IGN_GAZEBO_RESOURCE_PATH
+	if [ -f gazebo_env.sh ]; then
+		. ./gazebo_env.sh
+	elif [ -f ../gazebo_env.sh ]; then
+		. ../gazebo_env.sh
+	fi
+
+	if ! ign service --info --service /world/${PX4_SIM_WORLD}/create | grep "ignition.msgs.EntityFactory"; then
+		# starting ign gazebo with ${PX4_SIM_WORLD} world
+		echo "INFO  [init] starting ign gazebo"
+
+		if [ -z $HEADLESS ]; then
+			ign gazebo --verbose=1 -r "${PX4_IGN_GAZEBO_WORLDS}/${PX4_SIM_WORLD}.sdf" &
+		else
+			# starting ign gazebo headless
+			ign gazebo --verbose=1 -r -s "${PX4_IGN_GAZEBO_WORLDS}/${PX4_SIM_WORLD}.sdf" &
+		fi
+	else
+		echo "INFO  [init] ign gazebo already running"
+	fi
+
+	if simulator_ignition_bridge start -m "${PX4_SIM_MODEL}" -w "${PX4_SIM_WORLD}"; then
+		sensor_baro_sim start
+		sensor_gps_sim start
+		sensor_mag_sim start
+	else
+		echo "ERROR  [init] ign gazebo failed to start"
+		exit 1
+	fi
+
+else
+	# otherwise start simulator (mavlink) module
+	simulator_tcp_port=$((4560+px4_instance))
+
+	# Check if PX4_SIM_HOSTNAME environment variable is empty
+	# If empty check if PX4_SIM_HOST_ADDR environment variable is empty
+	# If both are empty use localhost for simulator
+	if [ -z "${PX4_SIM_HOSTNAME}" ]; then
+
+		if [ -z "${PX4_SIM_HOST_ADDR}" ]; then
+			echo "PX4 SIM HOST: localhost"
+			simulator_mavlink start -c $simulator_tcp_port
+		else
+			echo "PX4 SIM HOST: $PX4_SIM_HOST_ADDR"
+			simulator_mavlink start -t $PX4_SIM_HOST_ADDR $simulator_tcp_port
+		fi
+
+	else
+		echo "PX4 SIM HOST: $PX4_SIM_HOSTNAME"
+		simulator_mavlink start -h $PX4_SIM_HOSTNAME $simulator_tcp_port
+	fi
+
+fi
